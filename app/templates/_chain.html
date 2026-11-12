@@ -1,0 +1,63 @@
+{% for g in history %}
+<section>
+  <h2>世代 {{ g.generation }}{% if history|length > 1 %} / {{ history|length }}{% endif %}
+    {% if g.live %}<span class="tag add">在库</span>{% else %}<span class="tag del">已删除 {{ g.chain.deleted_at }}</span>{% endif %}
+    <span class="muted" style="font-weight:normal">链 #{{ g.chain.chain_id }} · 起点 {{ g.chain.started_at }} · 起始方式
+      {% if g.chain.start_kind == 'trace_start' %}追溯起点{% elif g.chain.start_kind == 'merge' %}离线修订{% else %}人工维护{% endif %}
+    </span>
+  </h2>
+  <table>
+    <tr><th>#</th><th>时间</th><th>方式</th><th>动作</th><th>字段</th><th>改前值</th><th>改后值</th><th>关联</th><th>说明</th></tr>
+    {% for e in g.events %}
+    <tr>
+      <td>{{ e.event_id }}</td>
+      <td>{{ e.created_at }}</td>
+      <td>
+        {% if e.kind == 'merge' %}<span class="tag add">离线修订</span>
+        {% elif e.kind == 'trace_start' %}<span class="tag">追溯起点</span>
+        {% else %}<span class="tag upd">人工维护</span>{% endif %}
+      </td>
+      <td>
+        {% if e.operation == 'create' %}新增{% elif e.operation == 'delete' %}删除{% elif e.operation == 'update' %}更新{% else %}{{ e.operation }}{% endif %}
+      </td>
+      <td>
+        {% for f in e.changed_fields %}
+          {{ FIELD_LABELS[f] }}{% if not loop.last %}、{% endif %}
+          {% set fo = e.field_origins.get(f, {}) %}
+          {% if e.kind == 'merge' %}
+            {% if e.operation != 'create' %}<span class="muted">（{% if fo.origin == 'revision' %}修订{% elif fo.origin == 'current_kept' %}保留当前{% elif fo.origin == 'revision_deletion' %}修订删除{% else %}{{ fo.origin }}{% endif %}{% if fo.resolution %} · 裁决{% endif %}）</span>{% endif %}
+          {% endif %}
+        {% endfor %}
+      </td>
+      <td class="basev">
+        {% for f in e.changed_fields %}
+          {% if f in e.before_values %}{{ FIELD_LABELS[f] }}={{ e.before_values[f] }}{% else %}—{% endif %}{% if not loop.last %}<br>{% endif %}
+        {% endfor %}
+      </td>
+      <td>
+        {% for f in e.changed_fields %}
+          {% if f in e.after_values %}{{ FIELD_LABELS[f] }}={{ e.after_values[f] }}{% else %}—{% endif %}{% if not loop.last %}<br>{% endif %}
+        {% endfor %}
+      </td>
+      <td class="muted">
+        {% if e.preview_token %}预览 {{ e.preview_token }}{% endif %}
+        {% if e.baseline_id %}<br>基线 #{{ e.baseline_id }}{% endif %}
+        {% if e.revision_id %}<br>修订 ID {{ e.revision_id }}{% endif %}
+        {% if e.resolutions %}<br>裁决 {% for f, v in e.resolutions.items() %}{% if f == '_' %}整行{% else %}{{ FIELD_LABELS[f] }}{% endif %}={{ '修订' if v == 'rev' else '当前' }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}
+        {% for f, v in e.field_origins.items() if v.revision_value is not none and f in e.changed_fields %}
+          <br>修订原值 {{ FIELD_LABELS[f] }}={{ v.revision_value }}
+        {% endfor %}
+      </td>
+      <td>{{ e.detail }}
+        {% if e.prev_sources and e.changed_fields %}
+          <br><span class="muted">改前来源：
+          {% for f in e.changed_fields if e.prev_sources.get(f) %}
+            事件 #{{ e.prev_sources[f] }}{% if not loop.last %}、{% endif %}
+          {% endfor %}</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endfor %}

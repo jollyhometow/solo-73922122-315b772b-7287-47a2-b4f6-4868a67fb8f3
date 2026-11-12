@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}已删记录 {{ rid }}{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>记录 {{ rid }} 的历史链（含已删世代）</h2>
+  <p class="muted">{% if history|length > 1 %}该 ID 曾删除后重建，共 {{ history|length }} 个世代。{% endif %}
+    删除保留旧链，删除后的同 ID 重建另起一条新链。</p>
+</section>
+
+{% include "_chain.html" %}
+
+<p><a class="btn plain" href="/deleted">返回已删记录</a> <a class="btn plain" href="/">返回首页</a></p>
+{% endblock %}

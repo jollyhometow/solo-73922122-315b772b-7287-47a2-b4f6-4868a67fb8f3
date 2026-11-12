@@ -1,8 +1,17 @@
-"""植被调查离线修订合并网页：FastAPI 入口。"""
+"""植被调查离线修订合并网页：FastAPI 入口。
+
+除记录维护 / 基线 / 修订合并外，提供字段来源查询：
+- /provenance            当前各记录各字段的来源总览与搜索
+- /provenance/{rid}      单条记录：当前字段来源 + 沿来源链的历次变化
+- /deleted               已删除记录列表
+- /deleted/{rid}         已删除记录的历史链（含同 ID 重建的多个世代）
+"""
 
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
@@ -15,21 +24,21 @@ from .merge import FIELD_LABELS, FIELDS, build_final_actions, compute_plan
 BASE_DIR = Path(__file__).resolve().parent
 SEED_CSV = os.environ.get("INITIAL_CSV", str(BASE_DIR.parent / "data" / "initial_records.csv"))
 
-app = FastAPI(title="植被调查离线修订合并")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    db.init_db(SEED_CSV)
+    yield
+
+
+app = FastAPI(title="植被调查离线修订合并", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.globals["FIELD_LABELS"] = FIELD_LABELS
-
-
-@app.on_event("startup")
-def startup():
-    db.init_db(SEED_CSV)
 
 
 def redirect(url: str, msg: str = "") -> RedirectResponse:
     if msg:
         sep = "&" if "?" in url else "?"
-        from urllib.parse import quote
-
         url = f"{url}{sep}msg={quote(msg)}"
     return RedirectResponse(url, status_code=303)
 
@@ -57,6 +66,7 @@ def index(request: Request, msg: str = ""):
             "records": db.get_records(),
             "baselines": db.list_baselines(),
             "previews": db.list_previews(),
+            "audit": db.provenance_audit(),
             "msg": msg,
         },
     )
@@ -81,9 +91,12 @@ def record_update(rid: str, quadrat: str = Form(...), species: str = Form(...), 
         n = parse_count(count)
         if not quadrat.strip() or not species.strip():
             raise ValueError("样方、物种不能为空")
-        if not db.update_record(rid, quadrat.strip(), species.strip(), n):
+        status = db.update_record(rid, quadrat.strip(), species.strip(), n)
+        if status == "missing":
             raise ValueError(f"记录 {rid} 不存在")
-        return redirect("/", f"已更新记录 {rid}")
+        if status == "unchanged":
+            return redirect("/", f"记录 {rid} 未变化，未改写来源")
+        return redirect("/", f"已更新记录 {rid}，来源已记入链")
     except Exception as e:
         return redirect("/", f"更新失败：{e}")
 
@@ -91,7 +104,7 @@ def record_update(rid: str, quadrat: str = Form(...), species: str = Form(...), 
 @app.post("/records/{rid}/delete")
 def record_delete(rid: str):
     if db.delete_record(rid):
-        return redirect("/", f"已删除记录 {rid}")
+        return redirect("/", f"已删除记录 {rid}（旧来源链保留，可在已删记录中查看）")
     return redirect("/", f"记录 {rid} 不存在")
 
 
@@ -183,7 +196,7 @@ def preview_discard(token: str):
     pv = db.get_preview(token)
     if pv and pv["status"] == "pending":
         db.set_preview_status(token, "discarded", "已放弃")
-    return redirect("/", "已放弃该合并预览")
+    return redirect("/", "已放弃该合并预览（未记入任何字段来源）")
 
 
 @app.post("/previews/{token}/confirm")
@@ -194,22 +207,11 @@ async def preview_confirm(token: str, request: Request):
     if pv["status"] != "pending":
         return redirect("/", "该预览已处理，不能重复确认")
 
-    # 1) 过期检测：仅核对计划触及的记录；无关记录变化不影响确认
-    fresh = db.get_records_by_ids(pv["plan"]["involved"])
-    if fresh != pv["snapshot"]:
-        baseline = db.get_baseline(pv["baseline_id"])
-        current = db.get_records()
-        plan = compute_plan(baseline["data"], pv["revision"], current)
-        snapshot = db.get_records_by_ids(plan["involved"])
-        db.update_preview_plan(
-            token, snapshot, plan, "拟改记录在预览后又被修改或删除，旧预览已作废并按最新当前记录重新比较，请重新核对。"
-        )
-        return redirect(f"/previews/{token}")
-
-    # 2) 汇总人工裁决
+    # 人工裁决汇总（字段/整行）
     form = await request.form()
     resolutions = {}
-    for conf in pv["plan"]["conflicts"]:
+    plan = pv["plan"]
+    for conf in plan["conflicts"]:
         rid = conf["id"]
         if conf["ctype"] == "fields":
             sel = {}
@@ -224,15 +226,96 @@ async def preview_confirm(token: str, request: Request):
             if v in ("rev", "cur"):
                 resolutions[rid] = {"_": v}
 
-    # 3) 合成最终动作并单事务应用；失败则当前数据不变
+    # 单事务：过期核对 + 记录变更 + 来源事件 + 预览状态。任一失败整体回滚。
     try:
-        actions = build_final_actions(pv["plan"], resolutions)
+        actions = build_final_actions(plan, resolutions)
     except ValueError as e:
         return redirect(f"/previews/{token}", str(e))
     try:
-        db.apply_actions(actions)
+        outcome = db.apply_preview(
+            token, pv["baseline_id"], pv["snapshot"], plan, actions, resolutions
+        )
     except Exception as e:
         return redirect(f"/previews/{token}", f"应用失败，当前数据未改变：{e}")
 
-    db.set_preview_status(token, "applied", f"已应用 {len(actions)} 项离线改动")
-    return redirect("/", f"合并完成：已应用 {len(actions)} 项离线改动")
+    if outcome == "processed":
+        return redirect("/", "该预览已处理，不能重复确认")
+    if outcome == "stale":
+        # 拟改记录在预览后变化：拒绝旧预览，按最新当前记录重新比较（不写来源）
+        baseline = db.get_baseline(pv["baseline_id"])
+        current = db.get_records()
+        plan = compute_plan(baseline["data"], pv["revision"], current)
+        snapshot = db.get_records_by_ids(plan["involved"])
+        db.update_preview_plan(
+            token, snapshot, plan,
+            "拟改记录在确认时已与预览时不同（已按提交前实际值核对），旧预览未应用；"
+            "已按最新当前记录重新比较，请重新核对。",
+        )
+        return redirect(f"/previews/{token}")
+
+    return redirect("/", "合并完成：离线改动与字段来源已整批应用")
+
+
+# ---------------- 来源查询 ----------------
+
+
+@app.get("/provenance", response_class=HTMLResponse)
+def provenance_index(request: Request, q: str = "", msg: str = ""):
+    overview = db.provenance_overview()
+    hit = db.search_records(q) if q.strip() else None
+    if hit is not None:
+        ids = sorted(set(hit["current"]) | set(hit["history"]))
+        overview = {rid: overview[rid] for rid in ids if rid in overview}
+    return templates.TemplateResponse(
+        request,
+        "provenance.html",
+        {
+            "request": request,
+            "overview": overview,
+            "audit": db.provenance_audit(),
+            "deleted": db.deleted_records(),
+            "q": q,
+            "hit": hit,
+            "msg": msg,
+        },
+    )
+
+
+@app.get("/provenance/{rid}", response_class=HTMLResponse)
+def provenance_detail(request: Request, rid: str, msg: str = ""):
+    fields = db.field_provenance(rid)
+    history = db.record_history(rid)
+    if not fields and not history:
+        return redirect("/provenance", f"记录 {rid} 没有来源信息")
+    return templates.TemplateResponse(
+        request,
+        "provenance_detail.html",
+        {
+            "request": request,
+            "rid": rid,
+            "fields": fields,
+            "history": history,
+            "msg": msg,
+        },
+    )
+
+
+@app.get("/deleted", response_class=HTMLResponse)
+def deleted_index(request: Request, msg: str = ""):
+    return templates.TemplateResponse(
+        request,
+        "deleted.html",
+        {"request": request, "deleted": db.deleted_records(), "msg": msg},
+    )
+
+
+@app.get("/deleted/{rid}", response_class=HTMLResponse)
+def deleted_detail(request: Request, rid: str, msg: str = ""):
+    history = db.record_history(rid)
+    if not history:
+        return redirect("/deleted", f"记录 {rid} 没有历史链")
+    return templates.TemplateResponse(
+        request,
+        "deleted_detail.html",
+        {"request": request, "rid": rid, "history": history, "msg": msg},
+    )

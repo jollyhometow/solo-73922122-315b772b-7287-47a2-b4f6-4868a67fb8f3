@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}已删记录 · 植被调查离线修订合并{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>已删除记录（{{ deleted|length }} 条）</h2>
+  <p class="muted">删除保留旧来源链；若之后同 ID 重建，会另起一条新链，旧链与删除时的值仍可查。
+    这里列出的是当前未再重建的已删记录。</p>
+  {% if not deleted %}<p class="muted">暂无已删记录。</p>{% endif %}
+  {% if deleted %}
+  <table>
+    <tr><th>ID</th><th>删除时间</th><th>删除方式</th><th>删除时值</th><th>世代数</th><th></th></tr>
+    {% for d in deleted %}
+    <tr>
+      <td><a href="/deleted/{{ d.id }}">{{ d.id }}</a></td>
+      <td>{{ d.deleted_at }}</td>
+      <td>{% if d.kind == 'merge' %}<span class="tag add">离线修订</span>{% else %}<span class="tag upd">人工维护</span>{% endif %}
+          {% if d.preview_token %}<span class="muted">预览 {{ d.preview_token }}</span>{% endif %}</td>
+      <td>样方={{ d["values"].quadrat }}，物种={{ d["values"].species }}，株数={{ d["values"].count }}</td>
+      <td>{{ d.generations }}</td>
+      <td><a class="btn plain" href="/deleted/{{ d.id }}">查看链</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <p><a class="btn plain" href="/provenance">来源总览</a> <a class="btn plain" href="/">返回首页</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}来源 · {{ rid }}{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>记录 {{ rid }} 的当前字段来源</h2>
+  {% if not fields %}
+    <p>该记录不在库中。{% if history %}可查看下方历史链{% endif %}</p>
+  {% else %}
+  <table>
+    <tr><th>字段</th><th>当前值</th><th>来源</th><th>改值时间</th><th>关联</th></tr>
+    {% for f in ['quadrat', 'species', 'count'] %}
+      {% set p = fields[f] %}
+      <tr>
+        <td>{{ FIELD_LABELS[f] }}</td>
+        <td>{{ p.value }}</td>
+        <td>
+          {% if p.unknown %}<span class="tag">未知（未推测）</span>
+          {% elif p.kind == 'trace_start' %}<span class="tag">追溯起点</span>
+          {% elif p.kind == 'merge' %}<span class="tag add">离线修订</span>
+          {% else %}<span class="tag upd">人工维护</span>{% endif %}
+          {% if not p.unknown %}<span class="muted">（事件 #{{ p.event_id }}）</span>{% endif %}
+        </td>
+        <td>{{ p.created_at if not p.unknown else '' }}</td>
+        <td class="muted">
+          {% if not p.unknown %}
+            {% if p.preview_token %}预览 {{ p.preview_token }}{% endif %}
+            {% if p.baseline_id %}{% if p.preview_token %} · {% endif %}基线 #{{ p.baseline_id }}{% endif %}
+            {% if p.revision_value is not none %}
+              {% if p.origin == 'revision' %}修订原值={{ p.revision_value }}{% else %}修订值={{ p.revision_value }}（未采用）{% endif %}
+            {% endif %}
+            {% if p.resolution %}裁决：{{ '采用修订' if p.resolution == 'rev' else '保留当前' }}{% endif %}
+            {% if p.prev_source %}改前来源事件 #{{ p.prev_source }}{% endif %}
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+
+<section>
+  <h2>沿链查看历次变化{% if history|length > 1 %}（含同 ID 重建，共 {{ history|length }} 个世代）{% endif %}</h2>
+  <p class="muted">每行是一次实际改值。未变字段不产生事件，沿用原来源；同值合并不改写来源。
+    已删记录的旧链保留，同 ID 重建会另起一条新链。</p>
+</section>
+
+{% if history %}
+  {% include "_chain.html" %}
+{% else %}
+  <section><p class="muted">没有来源事件。</p></section>
+{% endif %}
+
+<p><a class="btn plain" href="/provenance">返回来源总览</a> <a class="btn plain" href="/">返回首页</a></p>
+{% endblock %}

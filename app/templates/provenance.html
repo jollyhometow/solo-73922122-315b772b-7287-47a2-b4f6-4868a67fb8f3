@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}字段来源 · 植被调查离线修订合并{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>字段来源总览</h2>
+  <p class="muted">
+    当前记录 {{ overview|length }} 条；来源链 {{ audit.chains }} 条（在库 {{ audit.live }}，已删记录 {{ audit.deleted }}），
+    事件 {{ audit.events }} 条（人工 {{ audit.manuals }}，离线修订 {{ audit.merges }}）。
+    “追溯起点”表示启用来源追溯时已存在的数据，系统不推测更早的历史。
+  </p>
+  <form method="get" action="/provenance">
+    <input type="text" name="q" value="{{ q }}" placeholder="按记录 ID 搜索（含已删记录）" style="width:240px">
+    <button type="submit">搜索</button>
+    {% if q %}<a class="btn plain" href="/provenance">清除</a>{% endif %}
+  </form>
+  {% if hit %}
+    <p class="muted">匹配：当前在库 {{ hit.current|length }} 条{% if hit.history|length != hit.current|length %}，
+      历史（含已删）{{ hit.history|length }} 条{% endif %}。</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>当前记录各字段来源</h2>
+  {% if not overview %}<p class="muted">没有匹配的当前记录。</p>{% endif %}
+  {% if overview %}
+  <table>
+    <tr>
+      <th>ID</th>
+      <th>样方</th><th>样方来源</th>
+      <th>物种</th><th>物种来源</th>
+      <th>株数</th><th>株数来源</th>
+      <th></th>
+    </tr>
+    {% for rid, fields in overview.items() %}
+    <tr>
+      <td><a href="/provenance/{{ rid }}">{{ rid }}</a></td>
+      {% for f in ['quadrat', 'species', 'count'] %}
+        {% set p = fields[f] %}
+        <td>{{ p.value }}</td>
+        <td class="muted">
+          {% if p.unknown %}
+            <span class="tag">未知</span>
+          {% elif p.kind == 'trace_start' %}
+            <span class="tag">追溯起点</span>
+          {% elif p.kind == 'merge' %}
+            <span class="tag add">离线修订</span>
+            {% if p.preview_token %}预览 {{ p.preview_token }}{% endif %}
+            {% if p.baseline_id %}· 基线 #{{ p.baseline_id }}{% endif %}
+          {% else %}
+            <span class="tag upd">人工维护</span>
+          {% endif %}
+          <br><span title="{{ p.created_at }}">{{ p.created_at }}</span>
+        </td>
+      {% endfor %}
+      <td><a class="btn plain" href="/provenance/{{ rid }}">来源链</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+
+<section>
+  <h2>已删除记录（{{ deleted|length }} 条，来源链保留）<a class="btn plain" style="float:right" href="/deleted">单独查看</a></h2>
+  {% if not deleted %}<p class="muted">暂无未重建的已删记录。</p>{% endif %}
+  {% if deleted %}
+  <table>
+    <tr><th>ID</th><th>删除时间</th><th>删除方式</th><th>删除时值</th><th>世代数</th><th></th></tr>
+    {% for d in deleted[:20] %}
+    <tr>
+      <td>{{ d.id }}</td>
+      <td>{{ d.deleted_at }}</td>
+      <td>{% if d.kind == 'merge' %}<span class="tag add">离线修订</span>{% else %}<span class="tag upd">人工维护</span>{% endif %}
+          {% if d.preview_token %}<span class="muted">预览 {{ d.preview_token }}</span>{% endif %}</td>
+      <td>样方={{ d["values"].quadrat }}，物种={{ d["values"].species }}，株数={{ d["values"].count }}</td>
+      <td>{{ d.generations }}</td>
+      <td><a class="btn plain" href="/deleted/{{ d.id }}">查看链</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if deleted|length > 20 %}<p class="muted">仅显示最近 20 条，<a href="/deleted">查看全部</a>。</p>{% endif %}
+  {% endif %}
+</section>
+{% endblock %}

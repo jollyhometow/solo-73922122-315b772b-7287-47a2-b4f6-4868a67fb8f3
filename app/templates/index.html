@@ -4,8 +4,12 @@
 
 <section>
   <h2>① 当前记录（共 {{ records|length }} 条）<a class="btn plain" style="float:right" href="/export.csv">导出当前 CSV</a></h2>
+  <p class="muted">每次实际改值都会记入字段来源链；未变化的保存不产生来源。
+    来源链共 {{ audit.chains }} 条（在库 {{ audit.live }}，已删记录 {{ audit.deleted }}），
+    事件 {{ audit.events }} 条（人工 {{ audit.manuals }}，离线修订 {{ audit.merges }}）。
+    <a href="/provenance">查看各字段来源 →</a></p>
   <table>
-    <tr><th>ID</th><th>样方</th><th>物种</th><th>株数</th><th>操作</th></tr>
+    <tr><th>ID</th><th>样方</th><th>物种</th><th>株数</th><th>操作</th><th>来源</th></tr>
     {% for rid, r in records.items() %}
     <tr>
       <form method="post" action="/records/{{ rid }}/update">
@@ -17,6 +21,7 @@
           <button type="submit">保存</button>
           <button class="danger" type="submit" form="del-{{ rid }}" onclick="return confirm('确认删除 {{ rid }}？')">删除</button>
         </td>
+        <td><a class="btn plain" href="/provenance/{{ rid }}">字段来源</a></td>
       </form>
     </tr>
     <form id="del-{{ rid }}" method="post" action="/records/{{ rid }}/delete"></form>
@@ -28,6 +33,7 @@
         <td><input type="text" name="species" placeholder="物种" required></td>
         <td><input type="number" name="count" min="0" step="1" value="1" required></td>
         <td><button type="submit">新增</button></td>
+        <td></td>
       </form>
     </tr>
   </table>
@@ -69,6 +75,7 @@
 {% if previews %}
 <section>
   <h2>④ 合并预览记录</h2>
+  <p class="muted">放弃或未确认的预览不会写入任何字段来源；只有确认应用的预览才会在来源链上留下“离线修订”事件。</p>
   <table>
     <tr><th>预览号</th><th>基线</th><th>时间</th><th>状态</th><th>说明</th><th>操作</th></tr>
     {% for p in previews %}

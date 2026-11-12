@@ -10,7 +10,9 @@
     {% elif pv.status == 'applied' %}<span class="tag add">已应用</span>
     {% else %}<span class="tag">已放弃</span>{% endif %}
     　生成时间：{{ pv.created_at }}</p>
-  <p class="muted">确认时将重新核对本计划触及的 {{ plan.involved|length }} 条记录；若它们在预览后被改动或删除，本次确认会被拒绝并按最新当前记录重新比较；无关记录的变化不影响确认。</p>
+  <p class="muted">确认时在同一事务内重新读取本计划触及的 {{ plan.involved|length }} 条记录的实际值；
+  若它们在预览后被改动或删除，本次确认会被拒绝并按最新当前记录重新比较；无关记录的变化不影响确认。
+  放弃或拒绝的预览不会写入任何字段来源。</p>
 </section>
 
 <form method="post" action="/previews/{{ pv.token }}/confirm">
@@ -18,7 +20,7 @@
   <h2>自动合并（{{ plan.auto|length }} 项，无需处理）</h2>
   {% if plan.auto %}
   <table>
-    <tr><th>ID</th><th>动作</th><th>明细</th></tr>
+    <tr><th>ID</th><th>动作</th><th>明细</th><th>来源</th></tr>
     {% for a in plan.auto %}
     <tr>
       <td>{{ a.id }}</td>
@@ -34,9 +36,13 @@
           删除：样方={{ a.record.quadrat }}，物种={{ a.record.species }}，株数={{ a.record.count }}
         {% else %}
           {% for f, t in a.taken.items() %}
-            {% if t.src == 'rev' %}{{ FIELD_LABELS[f] }}：{{ t.base }} → <b>{{ t.value }}</b>（采用修订）{% else %}{{ FIELD_LABELS[f] }}：保留当前值 {{ t.value }}{% endif %}{{ "<br>" if not loop.last }}
+            {% if t.src == 'rev' %}{{ FIELD_LABELS[f] }}：{{ t.base }} → <b>{{ t.value }}</b>（采用修订）{% else %}{{ FIELD_LABELS[f] }}：保留当前值 {{ t.value }}{% endif %}{% if not loop.last %}<br>{% endif %}
           {% endfor %}
+          {% if not a.taken %}<span class="muted">仅同值合并，实际值未变</span>{% endif %}
         {% endif %}
+      </td>
+      <td class="muted">
+        {% if a.action == 'insert' %}离线修订新增{% elif a.action == 'delete' %}离线修订删除{% else %}逐字段采用修订/保留当前；未变字段沿用原来源{% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -53,7 +59,9 @@
     {% if c.ctype == 'fields' %}
       <h3>⚠️ {{ c.id }}：双方改了同一字段的不同值</h3>
       <p class="muted">已自动合并的字段：
-        {% for f, v in c.merged.items() %}{{ FIELD_LABELS[f] }}={{ v }}{% if not loop.last %}，{% endif %}{% endfor %}</p>
+        {% for f, v in c.merged.items() %}{{ FIELD_LABELS[f] }}={{ v }}{% if not loop.last %}，{% endif %}{% endfor %}
+        {% if c.same_value %}；双方改成同值、不改写来源：{% for f in c.same_value %}{{ FIELD_LABELS[f] }}{% if not loop.last %}，{% endif %}{% endfor %}{% endif %}
+      </p>
       <table>
         <tr><th>字段</th><th>基线值</th><th>修订值</th><th>当前值</th><th>选择</th></tr>
         {% for fc in c.fields %}
